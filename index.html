@@ -34,10 +34,11 @@
   .player{font-size:clamp(30px,9vw,52px);font-weight:750;letter-spacing:-.02em;line-height:1;text-align:center;text-wrap:balance}
   .clock{font:750 clamp(84px,34vw,190px)/1 var(--mono);letter-spacing:-.04em;font-variant-numeric:tabular-nums;margin:4px 0}
   .clock.low{color:var(--warn)}
-  .up .clock{color:var(--warn)}
+  .up .clock{color:var(--warn);animation:zoom .4s ease 0s 8}
   .up .player{color:var(--warn)}
-  .flash{animation:flash .5s ease 0s 4}
-  @keyframes flash{50%{background:color-mix(in srgb,var(--warn) 22%,var(--bg))}}
+  .flash{animation:flash .4s ease 0s 8}
+  @keyframes flash{0%,100%{background:transparent}50%{background:color-mix(in srgb,var(--warn) 50%,var(--bg))}}
+  @keyframes zoom{50%{transform:scale(1.06)}}
   .hint{font-size:13px;color:var(--soft);min-height:18px}
 
   .controls{display:flex;gap:12px;justify-content:center;align-items:center;margin-top:8px}
@@ -111,15 +112,6 @@
         <button data-step="1" data-target="players">+</button>
       </div>
     </div>
-    <div class="field">
-      <label>Heads-up warning (sec left)</label>
-      <div class="stepper">
-        <button data-step="-1" data-target="warn">−</button>
-        <input id="warn" type="number" inputmode="numeric" min="0" max="600" value="5" />
-        <button data-step="1" data-target="warn">+</button>
-      </div>
-    </div>
-    <div class="field" aria-hidden="true"></div>
     <div class="presets" id="presets">
       <button class="chip" data-secs="10">10s</button>
       <button class="chip" data-secs="15">15s</button>
@@ -130,7 +122,7 @@
     </div>
     <div class="row2">
       <label class="toggle"><input type="checkbox" id="autoloop" checked /> Auto-advance to next player</label>
-      <span class="muted" id="names-hint">Tap a preset or type any number of seconds.</span>
+      <label class="toggle"><input type="checkbox" id="halfwarn" checked /> Halfway heads-up beep</label>
     </div>
     <div class="names">
       <div class="label-row"><label>Player names (optional)</label><button type="button" class="tiny" id="names-clear">Clear</button></div>
@@ -143,24 +135,23 @@
   const $ = id => document.getElementById(id);
   const stage=$("stage"), whoEl=$("who"), playerEl=$("player"), clockEl=$("clock"), hintEl=$("hint");
   const startBtn=$("startpause"), resetBtn=$("reset"), nextBtn=$("next");
-  const secsIn=$("secs"), playersIn=$("players"), warnIn=$("warn"), autoloop=$("autoloop");
+  const secsIn=$("secs"), playersIn=$("players"), autoloop=$("autoloop"), halfEl=$("halfwarn");
 
   const LS="turntimer.cfg";
   let cfg = load();
-  secsIn.value=cfg.secs; playersIn.value=cfg.players; warnIn.value=cfg.warn; autoloop.checked=cfg.autoloop;
+  secsIn.value=cfg.secs; playersIn.value=cfg.players; autoloop.checked=cfg.autoloop; halfEl.checked=cfg.half;
 
   let duration=clampInt(secsIn.value,1,3600,30);
   let remaining=duration;
   let players=clampInt(playersIn.value,1,30,6);
   let cur=1;
   let names = Array.isArray(cfg.names) ? cfg.names.slice() : [];
-  let warnSecs = clampInt(cfg.warn, 0, 600, 5);
   let warned=false;
   let running=false, deadline=0, raf=0, tick=0;
   let audioCtx=null;
 
-  function load(){ try{return Object.assign({secs:30,players:6,autoloop:true,warn:5,names:[]}, JSON.parse(localStorage.getItem(LS))||{});}catch{ return {secs:30,players:6,autoloop:true,warn:5,names:[]}; } }
-  function save(){ localStorage.setItem(LS, JSON.stringify({secs:duration,players:players,autoloop:autoloop.checked,warn:warnSecs,names:names})); }
+  function load(){ try{return Object.assign({secs:30,players:6,autoloop:true,half:true,names:[]}, JSON.parse(localStorage.getItem(LS))||{});}catch{ return {secs:30,players:6,autoloop:true,half:true,names:[]}; } }
+  function save(){ localStorage.setItem(LS, JSON.stringify({secs:duration,players:players,autoloop:autoloop.checked,half:halfEl.checked,names:names})); }
   function clampInt(v,lo,hi,fb){ v=parseInt(v,10); if(isNaN(v))v=fb; return Math.min(hi,Math.max(lo,v)); }
   function fmt(s){ s=Math.max(0,Math.ceil(s)); const m=Math.floor(s/60); const r=s%60; return m>0? m+":"+String(r).padStart(2,"0") : String(r); }
   function nameOf(i){ const n=(names[i-1]||"").trim(); return n || ("Player "+i); }
@@ -181,7 +172,7 @@
 
   function render(){
     clockEl.textContent = fmt(remaining);
-    const lowAt = warnSecs>0 ? warnSecs : 5;
+    const lowAt = Math.max(5, duration*0.2);
     clockEl.classList.toggle("low", remaining<=lowAt && remaining>0 && running);
     whoEl.textContent = "Turn "+cur+" of "+players;
     if(!running){ playerEl.textContent = remaining<=0 ? nameOf(cur)+" — Time!" : nameOf(cur); }
@@ -191,28 +182,36 @@
     if(!audioCtx){ const AC=window.AudioContext||window.webkitAudioContext; if(AC) audioCtx=new AC(); }
     if(audioCtx && audioCtx.state==="suspended") audioCtx.resume();
   }
-  function beep(times){
+  // Loud, urgent end-of-turn alarm: harsh two-tone square siren, twice through.
+  function alarm(){
     if(!audioCtx) return;
     const now=audioCtx.currentTime;
-    for(let i=0;i<times;i++){
+    const master=audioCtx.createGain(); master.gain.value=0.9; master.connect(audioCtx.destination);
+    const notes=[988,1319,988,1319,988,1319,1568,1319,1568];
+    notes.forEach((f,i)=>{
       const o=audioCtx.createOscillator(), g=audioCtx.createGain();
-      o.type="sine"; o.frequency.value = 880 + (i===times-1?220:0);
-      const t=now+i*0.22;
+      o.type="square"; o.frequency.value=f;
+      const t=now+i*0.18;
       g.gain.setValueAtTime(0.0001,t);
-      g.gain.exponentialRampToValueAtTime(0.5,t+0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001,t+0.18);
-      o.connect(g).connect(audioCtx.destination); o.start(t); o.stop(t+0.2);
-    }
+      g.gain.exponentialRampToValueAtTime(0.9,t+0.008);
+      g.gain.setValueAtTime(0.9,t+0.12);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+0.175);
+      o.connect(g).connect(master); o.start(t); o.stop(t+0.18);
+    });
   }
+  // Halfway heads-up: two soft blips, clearly milder than the end alarm.
   function warnBeep(){
     if(!audioCtx) return;
-    const t=audioCtx.currentTime;
-    const o=audioCtx.createOscillator(), g=audioCtx.createGain();
-    o.type="triangle"; o.frequency.value=660;
-    g.gain.setValueAtTime(0.0001,t);
-    g.gain.exponentialRampToValueAtTime(0.35,t+0.02);
-    g.gain.exponentialRampToValueAtTime(0.0001,t+0.28);
-    o.connect(g).connect(audioCtx.destination); o.start(t); o.stop(t+0.3);
+    const now=audioCtx.currentTime;
+    for(let i=0;i<2;i++){
+      const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+      o.type="triangle"; o.frequency.value=700;
+      const t=now+i*0.16;
+      g.gain.setValueAtTime(0.0001,t);
+      g.gain.exponentialRampToValueAtTime(0.5,t+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+0.14);
+      o.connect(g).connect(audioCtx.destination); o.start(t); o.stop(t+0.15);
+    }
   }
   function vibrate(p){ if(navigator.vibrate) navigator.vibrate(p); }
 
@@ -227,14 +226,13 @@
   function loop(){
     remaining=(deadline-performance.now())/1000;
     if(remaining<=0){ remaining=0; render(); return finish(); }
-    if(!warned && warnSecs>0 && warnSecs<duration && remaining<=warnSecs){ warned=true; warnBeep(); vibrate(70); hintEl.textContent=Math.round(warnSecs)+"s left…"; }
+    if(!warned && halfEl.checked && remaining<=duration/2){ warned=true; warnBeep(); vibrate([80,50,80]); hintEl.textContent="Halfway — "+fmt(remaining)+" left"; }
     render();
     raf=requestAnimationFrame(loop);
   }
 
   function start(){
     duration=clampInt(secsIn.value,1,3600,30); players=clampInt(playersIn.value,1,30,6);
-    warnSecs=clampInt(warnIn.value,0,600,5);
     if(cur>players) cur=1;
     if(remaining<=0){ remaining=duration; warned=false; }
     ensureAudio(); save();
@@ -256,8 +254,8 @@
     running=false; cancelAnimationFrame(raf);
     startBtn.textContent="Start"; startBtn.classList.remove("running");
     stage.classList.add("up"); stage.classList.remove("flash"); void stage.offsetWidth; stage.classList.add("flash");
-    beep(3); vibrate([120,60,120,60,200]);
-    playerEl.textContent=nameOf(cur)+" — Time!";
+    alarm(); vibrate([300,120,300,120,300,120,600]);
+    playerEl.textContent=nameOf(cur)+" — TIME!";
     hintEl.textContent = autoloop.checked ? "Next player up…" : "Tap Next for the next player.";
     keepAwake(false);
     if(autoloop.checked){
@@ -285,7 +283,7 @@
   nextBtn.addEventListener("click", ()=>{ ensureAudio(); nextPlayer(); });
   secsIn.addEventListener("change", ()=>{ duration=clampInt(secsIn.value,1,3600,30); secsIn.value=duration; if(!running){remaining=duration;render();} save(); });
   playersIn.addEventListener("change", ()=>{ players=clampInt(playersIn.value,1,30,6); playersIn.value=players; if(cur>players)cur=1; buildNames(); render(); save(); });
-  warnIn.addEventListener("change", ()=>{ warnSecs=clampInt(warnIn.value,0,600,5); warnIn.value=warnSecs; save(); });
+  halfEl.addEventListener("change", save);
   autoloop.addEventListener("change", save);
 
   document.querySelectorAll(".stepper button").forEach(b=>b.addEventListener("click",()=>{
