@@ -60,6 +60,8 @@
   .stepper input{flex:1;min-width:0;border:0;background:transparent;color:var(--ink);text-align:center;
     font:700 20px var(--mono);font-variant-numeric:tabular-nums}
   .stepper input:focus{outline:none}
+  .sel{border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:12px;padding:12px 10px;font:600 15px var(--sans);width:100%}
+  .sel:focus{outline:none;border-color:var(--accent)}
   .presets{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap}
   .chip{background:var(--bg);border:1px solid var(--line);color:var(--ink);border-radius:999px;
     padding:8px 14px;font-size:14px;font-weight:650}
@@ -121,8 +123,8 @@
       </div>
     </div>
     <div class="field">
-      <label>Sound check</label>
-      <button type="button" id="test" class="ghost-btn" style="height:46px;border-radius:12px">🔊 Test sound</button>
+      <label>Alarm sound</label>
+      <select id="alarm-sound" class="sel"></select>
     </div>
     <div class="presets" id="presets">
       <button class="chip" data-secs="10">10s</button>
@@ -134,8 +136,9 @@
     </div>
     <div class="row2">
       <label class="toggle"><input type="checkbox" id="autoloop" checked /> Auto-advance to next player</label>
-      <span class="muted">iPhone: tap <b>Test sound</b> once to unlock audio, and turn your volume up. Set “Heads-up at 0” to turn the mid-turn beep off.</span>
+      <button type="button" id="test" class="ghost-btn" style="padding:9px 16px">🔊 Test</button>
     </div>
+    <p class="muted" style="grid-column:1/-1;margin:0">iPhone: tap <b>Test</b> once to unlock sound and keep your volume up. Heads-up at <b>0</b> = off. Picking a sound previews it.</p>
     <div class="names">
       <div class="label-row"><label>Player names (optional)</label><button type="button" class="tiny" id="names-clear">Clear</button></div>
       <div class="names-grid" id="names-grid"></div>
@@ -147,7 +150,7 @@
   const $ = id => document.getElementById(id);
   const stage=$("stage"), whoEl=$("who"), playerEl=$("player"), clockEl=$("clock"), hintEl=$("hint");
   const startBtn=$("startpause"), resetBtn=$("reset"), nextBtn=$("next");
-  const secsIn=$("secs"), playersIn=$("players"), autoloop=$("autoloop"), warnPctIn=$("warnpct"), testBtn=$("test");
+  const secsIn=$("secs"), playersIn=$("players"), autoloop=$("autoloop"), warnPctIn=$("warnpct"), testBtn=$("test"), alarmSel=$("alarm-sound");
 
   const LS="turntimer.cfg";
   let cfg = load();
@@ -162,8 +165,8 @@
   let warned=false;
   let running=false, deadline=0, raf=0, tick=0;
 
-  function load(){ try{return Object.assign({secs:30,players:6,autoloop:true,warnpct:50,names:[]}, JSON.parse(localStorage.getItem(LS))||{});}catch{ return {secs:30,players:6,autoloop:true,warnpct:50,names:[]}; } }
-  function save(){ localStorage.setItem(LS, JSON.stringify({secs:duration,players:players,autoloop:autoloop.checked,warnpct:warnPct,names:names})); }
+  function load(){ try{return Object.assign({secs:30,players:6,autoloop:true,warnpct:50,sound:"siren",names:[]}, JSON.parse(localStorage.getItem(LS))||{});}catch{ return {secs:30,players:6,autoloop:true,warnpct:50,sound:"siren",names:[]}; } }
+  function save(){ localStorage.setItem(LS, JSON.stringify({secs:duration,players:players,autoloop:autoloop.checked,warnpct:warnPct,sound:alarmChoice,names:names})); }
   function clampInt(v,lo,hi,fb){ v=parseInt(v,10); if(isNaN(v))v=fb; return Math.min(hi,Math.max(lo,v)); }
   function fmt(s){ s=Math.max(0,Math.ceil(s)); const m=Math.floor(s/60); const r=s%60; return m>0? m+":"+String(r).padStart(2,"0") : String(r); }
   function nameOf(i){ const n=(names[i-1]||"").trim(); return n || ("Player "+i); }
@@ -219,7 +222,17 @@
     }
     return toWav(s);
   }
-  const ALARM_URL = synth([988,1319,988,1319,988,1319,1568,1319,1568], "square", 0.75, 0.18, 0.03);
+  // Pick-and-choose end-of-turn sounds (order preserved for the dropdown).
+  const SOUNDS = {
+    siren:   { label:"Siren",    url: synth([988,1319,988,1319,988,1319,1568,1319,1568], "square", 0.75, 0.18, 0.03) },
+    beeps:   { label:"Beeps",    url: synth([1046,1046,1046,1046], "square", 0.7, 0.22, 0.09) },
+    buzzer:  { label:"Buzzer",   url: synth([196,185,196,185,196,185], "square", 0.85, 0.16, 0.0) },
+    airhorn: { label:"Air horn", url: synth([415,392,415,392], "square", 0.9, 0.34, 0.0) },
+    chime:   { label:"Chime",    url: synth([523,659,784,1047,1319], "sine", 0.7, 0.16, 0.02) },
+    bells:   { label:"Bells",    url: synth([1319,988,1319,988,1319], "triangle", 0.65, 0.22, 0.06) },
+    arcade:  { label:"Arcade",   url: synth([784,1047,784,1047,1568,1047,1568,2093], "square", 0.6, 0.12, 0.02) },
+  };
+  let alarmChoice = SOUNDS[cfg.sound] ? cfg.sound : "siren";
   const WARN_URL  = synth([784,988], "triangle", 0.6, 0.2, 0.05);
   const SILENT_URL= toWav(new Float32Array(Math.floor(RATE*0.04)));
 
@@ -230,7 +243,7 @@
     try{ sfx.src=SILENT_URL; const p=sfx.play(); if(p&&p.then) p.then(()=>{audioReady=true;}).catch(()=>{}); else audioReady=true; }catch{}
   }
   function play(url){ if(!sfx) return; try{ sfx.pause(); sfx.src=url; sfx.currentTime=0; const p=sfx.play(); if(p&&p.catch) p.catch(()=>{}); }catch{} }
-  const playAlarm=()=>play(ALARM_URL);
+  const playAlarm=()=>play((SOUNDS[alarmChoice]||SOUNDS.siren).url);
   const playWarn =()=>play(WARN_URL);
   function vibrate(p){ if(navigator.vibrate) navigator.vibrate(p); }
 
@@ -305,6 +318,7 @@
   warnPctIn.addEventListener("change", ()=>{ warnPct=clampInt(warnPctIn.value,0,90,50); warnPctIn.value=warnPct; save(); });
   autoloop.addEventListener("change", save);
   testBtn.addEventListener("click", ()=>{ unlockAudio(); playAlarm(); vibrate(200); });
+  alarmSel.addEventListener("change", ()=>{ alarmChoice=alarmSel.value; save(); unlockAudio(); playAlarm(); });
   document.addEventListener("pointerdown", unlockAudio, { once:true });
   document.addEventListener("touchend", unlockAudio, { once:true });
 
@@ -325,6 +339,8 @@
     else if(e.code==="ArrowRight"){ nextPlayer(); } });
 
   initAudio();
+  Object.entries(SOUNDS).forEach(([k,v])=>{ const o=document.createElement("option"); o.value=k; o.textContent=v.label; alarmSel.append(o); });
+  alarmSel.value=alarmChoice;
   buildNames();
   render();
 })();
