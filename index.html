@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<meta name="theme-color" content="#0d1013" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Turn Timer" />
+<title>Turn Timer</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%8F%B1%EF%B8%8F%3C/text%3E%3C/svg%3E" />
+<style>
+  :root{
+    --bg:#0d1013; --card:#171b20; --line:#272d34; --ink:#eef2f5; --soft:#93a0ab;
+    --accent:#3fb98a; --accent-ink:#04140d; --warn:#e5533c; --focus:#54c8ff;
+    --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,"Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f3f5f4; --card:#fff; --line:#e2e6e4; --ink:#14181c; --soft:#5c6772; --accent-ink:#fff; }
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    display:flex;flex-direction:column;min-height:100dvh;
+    padding:max(14px,env(safe-area-inset-top)) 16px calc(18px+env(safe-area-inset-bottom));
+    -webkit-font-smoothing:antialiased;touch-action:manipulation}
+  header{display:flex;align-items:center;gap:9px;justify-content:center;margin-bottom:6px}
+  header .dot{width:18px;height:18px;border-radius:6px;background:radial-gradient(circle at 30% 25%,#8ff0c6,var(--accent))}
+  header h1{font-size:16px;font-weight:650;letter-spacing:-.01em;margin:0}
+
+  .stage{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px}
+  .who{font-size:15px;color:var(--soft);letter-spacing:.06em;text-transform:uppercase;font-weight:650}
+  .player{font-size:clamp(30px,9vw,52px);font-weight:750;letter-spacing:-.02em;line-height:1;text-align:center;text-wrap:balance}
+  .clock{font:750 clamp(84px,34vw,190px)/1 var(--mono);letter-spacing:-.04em;font-variant-numeric:tabular-nums;margin:4px 0}
+  .clock.low{color:var(--warn)}
+  .up .clock{color:var(--warn)}
+  .up .player{color:var(--warn)}
+  .flash{animation:flash .5s ease 0s 4}
+  @keyframes flash{50%{background:color-mix(in srgb,var(--warn) 22%,var(--bg))}}
+  .hint{font-size:13px;color:var(--soft);min-height:18px}
+
+  .controls{display:flex;gap:12px;justify-content:center;align-items:center;margin-top:8px}
+  button{font-family:var(--sans);cursor:pointer;border:0}
+  .primary{background:var(--accent);color:var(--accent-ink);font-weight:750;font-size:20px;
+    padding:0 30px;height:64px;border-radius:16px;min-width:150px}
+  .primary.running{background:var(--warn);color:#fff}
+  .round{width:64px;height:64px;border-radius:16px;background:var(--card);border:1px solid var(--line);
+    color:var(--ink);font-size:15px;font-weight:650;display:grid;place-items:center}
+  button:active{transform:translateY(1px)}
+  button:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+
+  .setup{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;margin-top:14px;
+    display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:520px;width:100%;align-self:center}
+  .field{display:flex;flex-direction:column;gap:6px}
+  .field label{font-size:12px;color:var(--soft);font-weight:650;text-transform:uppercase;letter-spacing:.05em}
+  .stepper{display:flex;align-items:stretch;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--bg)}
+  .stepper button{width:46px;font-size:22px;background:transparent;color:var(--ink)}
+  .stepper input{flex:1;min-width:0;border:0;background:transparent;color:var(--ink);text-align:center;
+    font:700 20px var(--mono);font-variant-numeric:tabular-nums}
+  .stepper input:focus{outline:none}
+  .presets{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap}
+  .chip{background:var(--bg);border:1px solid var(--line);color:var(--ink);border-radius:999px;
+    padding:8px 14px;font-size:14px;font-weight:650}
+  .chip.on{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+  .row2{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+  .toggle{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ink)}
+  .toggle input{width:20px;height:20px;accent-color:var(--accent)}
+  .muted{color:var(--soft);font-size:12.5px}
+</style>
+</head>
+<body>
+  <header><span class="dot"></span><h1>Turn Timer</h1></header>
+
+  <div class="stage" id="stage">
+    <div class="who" id="who">Player 1</div>
+    <div class="player" id="player">Ready</div>
+    <div class="clock" id="clock">0:30</div>
+    <div class="hint" id="hint">Set the seconds, then Start.</div>
+    <div class="controls">
+      <button class="round" id="reset" title="Reset">Reset</button>
+      <button class="primary" id="startpause">Start</button>
+      <button class="round" id="next" title="Next player">Next ⟶</button>
+    </div>
+  </div>
+
+  <div class="setup">
+    <div class="field">
+      <label>Seconds per turn</label>
+      <div class="stepper">
+        <button data-step="-5" data-target="secs">−</button>
+        <input id="secs" type="number" inputmode="numeric" min="1" max="3600" value="30" />
+        <button data-step="5" data-target="secs">+</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>Players</label>
+      <div class="stepper">
+        <button data-step="-1" data-target="players">−</button>
+        <input id="players" type="number" inputmode="numeric" min="1" max="30" value="6" />
+        <button data-step="1" data-target="players">+</button>
+      </div>
+    </div>
+    <div class="presets" id="presets">
+      <button class="chip" data-secs="10">10s</button>
+      <button class="chip" data-secs="15">15s</button>
+      <button class="chip" data-secs="30">30s</button>
+      <button class="chip" data-secs="45">45s</button>
+      <button class="chip" data-secs="60">60s</button>
+      <button class="chip" data-secs="90">90s</button>
+    </div>
+    <div class="row2">
+      <label class="toggle"><input type="checkbox" id="autoloop" checked /> Auto-advance to next player</label>
+      <span class="muted" id="names-hint">Tap a preset or type any number of seconds.</span>
+    </div>
+  </div>
+
+<script>
+(function(){
+  const $ = id => document.getElementById(id);
+  const stage=$("stage"), whoEl=$("who"), playerEl=$("player"), clockEl=$("clock"), hintEl=$("hint");
+  const startBtn=$("startpause"), resetBtn=$("reset"), nextBtn=$("next");
+  const secsIn=$("secs"), playersIn=$("players"), autoloop=$("autoloop");
+
+  const LS="turntimer.cfg";
+  let cfg = load();
+  secsIn.value=cfg.secs; playersIn.value=cfg.players; autoloop.checked=cfg.autoloop;
+
+  let duration=clampInt(secsIn.value,1,3600,30);
+  let remaining=duration;
+  let players=clampInt(playersIn.value,1,30,6);
+  let cur=1;
+  let running=false, deadline=0, raf=0, tick=0;
+  let audioCtx=null;
+
+  function load(){ try{return Object.assign({secs:30,players:6,autoloop:true}, JSON.parse(localStorage.getItem(LS))||{});}catch{ return {secs:30,players:6,autoloop:true}; } }
+  function save(){ localStorage.setItem(LS, JSON.stringify({secs:duration,players:players,autoloop:autoloop.checked})); }
+  function clampInt(v,lo,hi,fb){ v=parseInt(v,10); if(isNaN(v))v=fb; return Math.min(hi,Math.max(lo,v)); }
+  function fmt(s){ s=Math.max(0,Math.ceil(s)); const m=Math.floor(s/60); const r=s%60; return m>0? m+":"+String(r).padStart(2,"0") : String(r); }
+
+  function render(){
+    clockEl.textContent = fmt(remaining);
+    clockEl.classList.toggle("low", remaining<=5 && remaining>0 && running);
+    whoEl.textContent = "Player "+cur+" of "+players;
+    if(!running && remaining<=0){ playerEl.textContent="Time!"; }
+  }
+
+  function ensureAudio(){
+    if(!audioCtx){ const AC=window.AudioContext||window.webkitAudioContext; if(AC) audioCtx=new AC(); }
+    if(audioCtx && audioCtx.state==="suspended") audioCtx.resume();
+  }
+  function beep(times){
+    if(!audioCtx) return;
+    const now=audioCtx.currentTime;
+    for(let i=0;i<times;i++){
+      const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+      o.type="sine"; o.frequency.value = 880 + (i===times-1?220:0);
+      const t=now+i*0.22;
+      g.gain.setValueAtTime(0.0001,t);
+      g.gain.exponentialRampToValueAtTime(0.5,t+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+0.18);
+      o.connect(g).connect(audioCtx.destination); o.start(t); o.stop(t+0.2);
+    }
+  }
+  function vibrate(p){ if(navigator.vibrate) navigator.vibrate(p); }
+
+  let wakeLock=null;
+  async function keepAwake(on){
+    try{
+      if(on && "wakeLock" in navigator){ wakeLock=await navigator.wakeLock.request("screen"); }
+      else if(wakeLock){ wakeLock.release(); wakeLock=null; }
+    }catch{}
+  }
+
+  function loop(){
+    remaining=(deadline-performance.now())/1000;
+    if(remaining<=0){ remaining=0; render(); return finish(); }
+    render();
+    raf=requestAnimationFrame(loop);
+  }
+
+  function start(){
+    duration=clampInt(secsIn.value,1,3600,30); players=clampInt(playersIn.value,1,30,6);
+    if(cur>players) cur=1;
+    if(remaining<=0) remaining=duration;
+    ensureAudio(); save();
+    running=true;
+    stage.classList.remove("up","flash");
+    playerEl.textContent="Player "+cur;
+    hintEl.textContent="Timer running…";
+    startBtn.textContent="Pause"; startBtn.classList.add("running");
+    deadline=performance.now()+remaining*1000;
+    keepAwake(true);
+    cancelAnimationFrame(raf); raf=requestAnimationFrame(loop);
+  }
+  function pause(){
+    running=false; cancelAnimationFrame(raf);
+    startBtn.textContent="Start"; startBtn.classList.remove("running");
+    hintEl.textContent="Paused."; keepAwake(false);
+  }
+  function finish(){
+    running=false; cancelAnimationFrame(raf);
+    startBtn.textContent="Start"; startBtn.classList.remove("running");
+    stage.classList.add("up"); stage.classList.remove("flash"); void stage.offsetWidth; stage.classList.add("flash");
+    beep(3); vibrate([120,60,120,60,200]);
+    playerEl.textContent="Player "+cur+" — Time!";
+    hintEl.textContent = autoloop.checked ? "Next player up…" : "Tap Next for the next player.";
+    keepAwake(false);
+    if(autoloop.checked){
+      setTimeout(()=>{ advance(); remaining=duration; render(); start(); }, 900);
+    }
+  }
+  function advance(){
+    cur = cur>=players ? 1 : cur+1;
+    stage.classList.remove("up","flash");
+  }
+  function nextPlayer(){
+    advance(); remaining=duration; playerEl.textContent="Player "+cur; hintEl.textContent="Set — press Start."; render();
+    if(running){ deadline=performance.now()+remaining*1000; }
+  }
+  function reset(){
+    pause(); cur=1; duration=clampInt(secsIn.value,1,3600,30); remaining=duration;
+    stage.classList.remove("up","flash"); playerEl.textContent="Ready"; hintEl.textContent="Set the seconds, then Start.";
+    render();
+  }
+
+  // events
+  startBtn.addEventListener("click", ()=> running?pause():start());
+  resetBtn.addEventListener("click", reset);
+  nextBtn.addEventListener("click", ()=>{ ensureAudio(); nextPlayer(); });
+  secsIn.addEventListener("change", ()=>{ duration=clampInt(secsIn.value,1,3600,30); secsIn.value=duration; if(!running){remaining=duration;render();} save(); });
+  playersIn.addEventListener("change", ()=>{ players=clampInt(playersIn.value,1,30,6); playersIn.value=players; if(cur>players)cur=1; render(); save(); });
+  autoloop.addEventListener("change", save);
+
+  document.querySelectorAll(".stepper button").forEach(b=>b.addEventListener("click",()=>{
+    const t=$(b.dataset.target); const step=parseInt(b.dataset.step,10);
+    t.value=(parseInt(t.value,10)||0)+step; t.dispatchEvent(new Event("change"));
+  }));
+  const presets=$("presets");
+  presets.addEventListener("click",e=>{ const c=e.target.closest(".chip"); if(!c)return;
+    secsIn.value=c.dataset.secs; secsIn.dispatchEvent(new Event("change"));
+    presets.querySelectorAll(".chip").forEach(x=>x.classList.toggle("on",x===c));
+  });
+  // mark active preset if matches
+  presets.querySelectorAll(".chip").forEach(x=>{ if(+x.dataset.secs===duration) x.classList.add("on"); });
+
+  // spacebar = start/pause (desktop)
+  document.addEventListener("keydown",e=>{ if(e.code==="Space" && e.target.tagName!=="INPUT"){ e.preventDefault(); running?pause():start(); }
+    else if(e.code==="ArrowRight"){ nextPlayer(); } });
+
+  render();
+})();
+</script>
+</body>
+</html>
