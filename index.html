@@ -112,6 +112,18 @@
         <button data-step="1" data-target="players">+</button>
       </div>
     </div>
+    <div class="field">
+      <label>Heads-up at (% left)</label>
+      <div class="stepper">
+        <button data-step="-10" data-target="warnpct">−</button>
+        <input id="warnpct" type="number" inputmode="numeric" min="0" max="90" step="10" value="50" />
+        <button data-step="10" data-target="warnpct">+</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>Sound check</label>
+      <button type="button" id="test" class="ghost-btn" style="height:46px;border-radius:12px">🔊 Test sound</button>
+    </div>
     <div class="presets" id="presets">
       <button class="chip" data-secs="10">10s</button>
       <button class="chip" data-secs="15">15s</button>
@@ -122,7 +134,7 @@
     </div>
     <div class="row2">
       <label class="toggle"><input type="checkbox" id="autoloop" checked /> Auto-advance to next player</label>
-      <label class="toggle"><input type="checkbox" id="halfwarn" checked /> Halfway heads-up beep</label>
+      <span class="muted">iPhone: tap <b>Test sound</b> once to unlock audio, and turn your volume up. Set “Heads-up at 0” to turn the mid-turn beep off.</span>
     </div>
     <div class="names">
       <div class="label-row"><label>Player names (optional)</label><button type="button" class="tiny" id="names-clear">Clear</button></div>
@@ -135,23 +147,23 @@
   const $ = id => document.getElementById(id);
   const stage=$("stage"), whoEl=$("who"), playerEl=$("player"), clockEl=$("clock"), hintEl=$("hint");
   const startBtn=$("startpause"), resetBtn=$("reset"), nextBtn=$("next");
-  const secsIn=$("secs"), playersIn=$("players"), autoloop=$("autoloop"), halfEl=$("halfwarn");
+  const secsIn=$("secs"), playersIn=$("players"), autoloop=$("autoloop"), warnPctIn=$("warnpct"), testBtn=$("test");
 
   const LS="turntimer.cfg";
   let cfg = load();
-  secsIn.value=cfg.secs; playersIn.value=cfg.players; autoloop.checked=cfg.autoloop; halfEl.checked=cfg.half;
+  secsIn.value=cfg.secs; playersIn.value=cfg.players; autoloop.checked=cfg.autoloop; warnPctIn.value=cfg.warnpct;
 
   let duration=clampInt(secsIn.value,1,3600,30);
   let remaining=duration;
   let players=clampInt(playersIn.value,1,30,6);
   let cur=1;
   let names = Array.isArray(cfg.names) ? cfg.names.slice() : [];
+  let warnPct=clampInt(cfg.warnpct,0,90,50);
   let warned=false;
   let running=false, deadline=0, raf=0, tick=0;
-  let audioCtx=null;
 
-  function load(){ try{return Object.assign({secs:30,players:6,autoloop:true,half:true,names:[]}, JSON.parse(localStorage.getItem(LS))||{});}catch{ return {secs:30,players:6,autoloop:true,half:true,names:[]}; } }
-  function save(){ localStorage.setItem(LS, JSON.stringify({secs:duration,players:players,autoloop:autoloop.checked,half:halfEl.checked,names:names})); }
+  function load(){ try{return Object.assign({secs:30,players:6,autoloop:true,warnpct:50,names:[]}, JSON.parse(localStorage.getItem(LS))||{});}catch{ return {secs:30,players:6,autoloop:true,warnpct:50,names:[]}; } }
+  function save(){ localStorage.setItem(LS, JSON.stringify({secs:duration,players:players,autoloop:autoloop.checked,warnpct:warnPct,names:names})); }
   function clampInt(v,lo,hi,fb){ v=parseInt(v,10); if(isNaN(v))v=fb; return Math.min(hi,Math.max(lo,v)); }
   function fmt(s){ s=Math.max(0,Math.ceil(s)); const m=Math.floor(s/60); const r=s%60; return m>0? m+":"+String(r).padStart(2,"0") : String(r); }
   function nameOf(i){ const n=(names[i-1]||"").trim(); return n || ("Player "+i); }
@@ -178,41 +190,48 @@
     if(!running){ playerEl.textContent = remaining<=0 ? nameOf(cur)+" — Time!" : nameOf(cur); }
   }
 
-  function ensureAudio(){
-    if(!audioCtx){ const AC=window.AudioContext||window.webkitAudioContext; if(AC) audioCtx=new AC(); }
-    if(audioCtx && audioCtx.state==="suspended") audioCtx.resume();
+  // --- Audio ---
+  // iOS Safari mutes the Web Audio API when the ring/silent switch is on, so we
+  // synthesize real WAV clips and play them through a single <audio> media
+  // element (media plays even on silent), unlocked on the first user tap.
+  const RATE=22050;
+  function toWav(samples){
+    const n=samples.length, buf=new ArrayBuffer(44+n*2), v=new DataView(buf);
+    const w=(o,s)=>{ for(let i=0;i<s.length;i++) v.setUint8(o+i,s.charCodeAt(i)); };
+    w(0,"RIFF"); v.setUint32(4,36+n*2,true); w(8,"WAVE"); w(12,"fmt ");
+    v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
+    v.setUint32(24,RATE,true); v.setUint32(28,RATE*2,true); v.setUint16(32,2,true); v.setUint16(34,16,true);
+    w(36,"data"); v.setUint32(40,n*2,true);
+    let o=44; for(let i=0;i<n;i++){ const c=Math.max(-1,Math.min(1,samples[i])); v.setInt16(o, c<0?c*0x8000:c*0x7fff, true); o+=2; }
+    let bin=""; const b=new Uint8Array(buf); for(let i=0;i<b.length;i++) bin+=String.fromCharCode(b[i]);
+    return "data:audio/wav;base64,"+btoa(bin);
   }
-  // Loud, urgent end-of-turn alarm: harsh two-tone square siren, twice through.
-  function alarm(){
-    if(!audioCtx) return;
-    const now=audioCtx.currentTime;
-    const master=audioCtx.createGain(); master.gain.value=0.9; master.connect(audioCtx.destination);
-    const notes=[988,1319,988,1319,988,1319,1568,1319,1568];
-    notes.forEach((f,i)=>{
-      const o=audioCtx.createOscillator(), g=audioCtx.createGain();
-      o.type="square"; o.frequency.value=f;
-      const t=now+i*0.18;
-      g.gain.setValueAtTime(0.0001,t);
-      g.gain.exponentialRampToValueAtTime(0.9,t+0.008);
-      g.gain.setValueAtTime(0.9,t+0.12);
-      g.gain.exponentialRampToValueAtTime(0.0001,t+0.175);
-      o.connect(g).connect(master); o.start(t); o.stop(t+0.18);
-    });
-  }
-  // Halfway heads-up: two soft blips, clearly milder than the end alarm.
-  function warnBeep(){
-    if(!audioCtx) return;
-    const now=audioCtx.currentTime;
-    for(let i=0;i<2;i++){
-      const o=audioCtx.createOscillator(), g=audioCtx.createGain();
-      o.type="triangle"; o.frequency.value=700;
-      const t=now+i*0.16;
-      g.gain.setValueAtTime(0.0001,t);
-      g.gain.exponentialRampToValueAtTime(0.5,t+0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001,t+0.14);
-      o.connect(g).connect(audioCtx.destination); o.start(t); o.stop(t+0.15);
+  function synth(notes, type, amp, noteLen, gap){
+    const N=Math.ceil(RATE*(notes.length*noteLen+0.03)); const s=new Float32Array(N);
+    for(let idx=0; idx<notes.length; idx++){
+      const f=notes[idx], on=noteLen-gap, base=Math.floor(idx*noteLen*RATE);
+      for(let k=0, K=Math.floor(on*RATE); k<K; k++){
+        const t=k/RATE;
+        const val = type==="square" ? (Math.sin(2*Math.PI*f*t)>=0?1:-1) : Math.sin(2*Math.PI*f*t);
+        const env = Math.min(1, t/0.006) * Math.max(0, 1 - t/on);
+        s[base+k] = val*amp*env;
+      }
     }
+    return toWav(s);
   }
+  const ALARM_URL = synth([988,1319,988,1319,988,1319,1568,1319,1568], "square", 0.75, 0.18, 0.03);
+  const WARN_URL  = synth([784,988], "triangle", 0.6, 0.2, 0.05);
+  const SILENT_URL= toWav(new Float32Array(Math.floor(RATE*0.04)));
+
+  let sfx=null, audioReady=false;
+  function initAudio(){ sfx=new Audio(); sfx.preload="auto"; sfx.setAttribute("playsinline",""); sfx.volume=1; }
+  function unlockAudio(){
+    if(audioReady||!sfx) return;
+    try{ sfx.src=SILENT_URL; const p=sfx.play(); if(p&&p.then) p.then(()=>{audioReady=true;}).catch(()=>{}); else audioReady=true; }catch{}
+  }
+  function play(url){ if(!sfx) return; try{ sfx.pause(); sfx.src=url; sfx.currentTime=0; const p=sfx.play(); if(p&&p.catch) p.catch(()=>{}); }catch{} }
+  const playAlarm=()=>play(ALARM_URL);
+  const playWarn =()=>play(WARN_URL);
   function vibrate(p){ if(navigator.vibrate) navigator.vibrate(p); }
 
   let wakeLock=null;
@@ -226,16 +245,16 @@
   function loop(){
     remaining=(deadline-performance.now())/1000;
     if(remaining<=0){ remaining=0; render(); return finish(); }
-    if(!warned && halfEl.checked && remaining<=duration/2){ warned=true; warnBeep(); vibrate([80,50,80]); hintEl.textContent="Halfway — "+fmt(remaining)+" left"; }
+    if(!warned && warnPct>0 && remaining<=duration*warnPct/100){ warned=true; playWarn(); vibrate([80,50,80]); hintEl.textContent=warnPct+"% left — "+fmt(remaining); }
     render();
     raf=requestAnimationFrame(loop);
   }
 
   function start(){
-    duration=clampInt(secsIn.value,1,3600,30); players=clampInt(playersIn.value,1,30,6);
+    duration=clampInt(secsIn.value,1,3600,30); players=clampInt(playersIn.value,1,30,6); warnPct=clampInt(warnPctIn.value,0,90,50);
     if(cur>players) cur=1;
     if(remaining<=0){ remaining=duration; warned=false; }
-    ensureAudio(); save();
+    unlockAudio(); save();
     running=true;
     stage.classList.remove("up","flash");
     playerEl.textContent=nameOf(cur);
@@ -254,7 +273,7 @@
     running=false; cancelAnimationFrame(raf);
     startBtn.textContent="Start"; startBtn.classList.remove("running");
     stage.classList.add("up"); stage.classList.remove("flash"); void stage.offsetWidth; stage.classList.add("flash");
-    alarm(); vibrate([300,120,300,120,300,120,600]);
+    playAlarm(); vibrate([300,120,300,120,300,120,600]);
     playerEl.textContent=nameOf(cur)+" — TIME!";
     hintEl.textContent = autoloop.checked ? "Next player up…" : "Tap Next for the next player.";
     keepAwake(false);
@@ -280,11 +299,14 @@
   // events
   startBtn.addEventListener("click", ()=> running?pause():start());
   resetBtn.addEventListener("click", reset);
-  nextBtn.addEventListener("click", ()=>{ ensureAudio(); nextPlayer(); });
+  nextBtn.addEventListener("click", ()=>{ unlockAudio(); nextPlayer(); });
   secsIn.addEventListener("change", ()=>{ duration=clampInt(secsIn.value,1,3600,30); secsIn.value=duration; if(!running){remaining=duration;render();} save(); });
   playersIn.addEventListener("change", ()=>{ players=clampInt(playersIn.value,1,30,6); playersIn.value=players; if(cur>players)cur=1; buildNames(); render(); save(); });
-  halfEl.addEventListener("change", save);
+  warnPctIn.addEventListener("change", ()=>{ warnPct=clampInt(warnPctIn.value,0,90,50); warnPctIn.value=warnPct; save(); });
   autoloop.addEventListener("change", save);
+  testBtn.addEventListener("click", ()=>{ unlockAudio(); playAlarm(); vibrate(200); });
+  document.addEventListener("pointerdown", unlockAudio, { once:true });
+  document.addEventListener("touchend", unlockAudio, { once:true });
 
   document.querySelectorAll(".stepper button").forEach(b=>b.addEventListener("click",()=>{
     const t=$(b.dataset.target); const step=parseInt(b.dataset.step,10);
@@ -302,6 +324,7 @@
   document.addEventListener("keydown",e=>{ if(e.code==="Space" && e.target.tagName!=="INPUT"){ e.preventDefault(); running?pause():start(); }
     else if(e.code==="ArrowRight"){ nextPlayer(); } });
 
+  initAudio();
   buildNames();
   render();
 })();
